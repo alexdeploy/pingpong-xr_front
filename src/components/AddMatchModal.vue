@@ -1,171 +1,252 @@
 <script setup>
-import { ref, computed, watch } from 'vue';
-import PlayerSelect from './PlayerSelect.vue';
-import Button from './Button.vue';
+import { ref, computed, onMounted } from 'vue'
+import { fetchPlayers, createMatch } from '../services/api'
 
-const props = defineProps({
-  isOpen: Boolean,
-  players: Array,
-  isSubmitting: Boolean
-});
+const emit = defineEmits(['close', 'match-added'])
 
-const emit = defineEmits(['close', 'submit']);
+const players = ref([])
+const loading = ref(true)
+const error = ref(null)
+const submitting = ref(false)
 
-const player1Id = ref('');
-const player2Id = ref('');
-const player1Score = ref(null);
-const player2Score = ref(null);
-const errorMessage = ref('');
+const form = ref({
+  player1: '',
+  player2: '',
+  score1: 0,
+  score2: 0
+})
 
-watch(() => props.isOpen, (newVal) => {
-  if (newVal) {
-    resetForm();
-  }
-});
-
-const resetForm = () => {
-  player1Id.value = '';
-  player2Id.value = '';
-  player1Score.value = null;
-  player2Score.value = null;
-  errorMessage.value = '';
-};
+const formErrors = ref({
+  player1: '',
+  player2: '',
+  score1: '',
+  score2: '',
+  general: ''
+})
 
 const isFormValid = computed(() => {
-  return (
-    player1Id.value && 
-    player2Id.value && 
-    player1Id.value !== player2Id.value &&
-    player1Score.value !== null && 
-    player2Score.value !== null &&
-    player1Score.value !== player2Score.value
-  );
-});
+  // Check if players are selected and different
+  if (!form.value.player1 || !form.value.player2) return false
+  if (form.value.player1 === form.value.player2) return false
+  
+  // Check if scores are valid numbers
+  if (isNaN(form.value.score1) || form.value.score1 < 0) return false
+  if (isNaN(form.value.score2) || form.value.score2 < 0) return false
+  
+  // Check if at least one player has a non-zero score
+  if (form.value.score1 === 0 && form.value.score2 === 0) return false
+  
+  // Check if scores are different (we need a winner)
+  if (form.value.score1 === form.value.score2) return false
+  
+  return true
+})
 
-const getPlayerById = (id) => {
-  return props.players.find(player => player._id === id);
-};
+const winnerId = computed(() => {
+  return form.value.score1 > form.value.score2 ? form.value.player1 : form.value.player2
+})
 
-const handleSubmit = () => {
-  if (!isFormValid.value) {
-    errorMessage.value = 'Please fill all fields correctly. Players must be different and scores cannot be equal.';
-    return;
+const loserId = computed(() => {
+  return form.value.score1 > form.value.score2 ? form.value.player2 : form.value.player1
+})
+
+const validateForm = () => {
+  let isValid = true
+  formErrors.value = {
+    player1: '',
+    player2: '',
+    score1: '',
+    score2: '',
+    general: ''
   }
+  
+  if (!form.value.player1) {
+    formErrors.value.player1 = 'Selecciona el jugador 1'
+    isValid = false
+  }
+  
+  if (!form.value.player2) {
+    formErrors.value.player2 = 'Selecciona el jugador 2'
+    isValid = false
+  }
+  
+  if (form.value.player1 && form.value.player2 && form.value.player1 === form.value.player2) {
+    formErrors.value.player2 = 'Los jugadores deben ser diferentes'
+    isValid = false
+  }
+  
+  if (isNaN(form.value.score1) || form.value.score1 < 0) {
+    formErrors.value.score1 = 'La puntuación debe ser un número positivo'
+    isValid = false
+  }
+  
+  if (isNaN(form.value.score2) || form.value.score2 < 0) {
+    formErrors.value.score2 = 'La puntuación debe ser un número positivo'
+    isValid = false
+  }
+  
+  if (form.value.score1 === form.value.score2) {
+    formErrors.value.general = 'Las puntuaciones deben ser diferentes'
+    isValid = false
+  }
+  
+  return isValid
+}
 
-  const p1Score = player1Score.value;
-  const p2Score = player2Score.value;
+const handleSubmit = async () => {
+  if (!validateForm()) return
   
-  const winnerId = p1Score > p2Score ? player1Id.value : player2Id.value;
-  const loserId = p1Score > p2Score ? player2Id.value : player1Id.value;
+  submitting.value = true
   
-  const players = [
-    { playerId: player1Id.value, score: p1Score },
-    { playerId: player2Id.value, score: p2Score }
-  ];
-  
-  const matchData = {
-    players,
-    winnerId,
-    loserId
-  };
-  
-  emit('submit', matchData);
-};
+  try {
+    const matchData = {
+      players: [
+        {
+          playerId: form.value.player1,
+          score: parseInt(form.value.score1)
+        },
+        {
+          playerId: form.value.player2,
+          score: parseInt(form.value.score2)
+        }
+      ],
+      winnerId: winnerId.value,
+      loserId: loserId.value
+    }
+    
+    await createMatch(matchData)
+    emit('match-added')
+  } catch (err) {
+    formErrors.value.general = 'Error al crear el partido. Por favor, intenta de nuevo.'
+  } finally {
+    submitting.value = false
+  }
+}
 
-const handleClose = () => {
-  emit('close');
-};
+onMounted(async () => {
+  try {
+    players.value = await fetchPlayers()
+  } catch (err) {
+    error.value = 'Error al cargar los jugadores. Por favor, intenta de nuevo más tarde.'
+  } finally {
+    loading.value = false
+  }
+})
 </script>
 
 <template>
-  <div v-if="isOpen" class="modal-overlay" @click="handleClose">
-    <div class="modal-content" @click.stop>
+  <div class="modal-overlay" @click="emit('close')">
+    <div class="modal-container" @click.stop>
       <div class="modal-header">
-        <h3>Add Match Result</h3>
-        <button class="close-button" @click="handleClose">&times;</button>
+        <h3>Añadir Partido</h3>
+        <button class="close-button" @click="emit('close')">×</button>
       </div>
       
-      <div class="modal-body">
-        <div class="error-message" v-if="errorMessage">
-          {{ errorMessage }}
+      <div v-if="loading" class="modal-loading">
+        <div class="spinner"></div>
+        <p>Cargando jugadores...</p>
+      </div>
+      
+      <div v-else-if="error" class="modal-error">
+        {{ error }}
+      </div>
+      
+      <form v-else @submit.prevent="handleSubmit" class="modal-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="player1">Jugador 1</label>
+            <select 
+              id="player1" 
+              v-model="form.player1"
+              :class="{ 'error': formErrors.player1 }"
+            >
+              <option value="">Seleccionar jugador</option>
+              <option v-for="player in players" :key="player._id" :value="player._id">
+                {{ player.name }}
+              </option>
+            </select>
+            <span v-if="formErrors.player1" class="error-text">{{ formErrors.player1 }}</span>
+          </div>
+          
+          <div class="form-group">
+            <label for="score1">Puntuación</label>
+            <input 
+              type="number" 
+              id="score1" 
+              v-model.number="form.score1"
+              min="0"
+              :class="{ 'error': formErrors.score1 }"
+            >
+            <span v-if="formErrors.score1" class="error-text">{{ formErrors.score1 }}</span>
+          </div>
         </div>
         
-        <form @submit.prevent="handleSubmit">
-          <div class="players-container">
-            <div class="player-column">
-              <PlayerSelect 
-                v-model="player1Id" 
-                :players="players"
-                label="Player 1"
-                :otherSelectedId="player2Id"
-                :disabled="isSubmitting"
-              />
-              
-              <div class="score-input">
-                <label for="player1Score">Score</label>
-                <input
-                  id="player1Score"
-                  type="number"
-                  v-model.number="player1Score"
-                  min="0"
-                  max="99"
-                  :disabled="isSubmitting"
-                />
-              </div>
-            </div>
-            
-            <div class="versus">VS</div>
-            
-            <div class="player-column">
-              <PlayerSelect 
-                v-model="player2Id" 
-                :players="players"
-                label="Player 2"
-                :otherSelectedId="player1Id"
-                :disabled="isSubmitting"
-              />
-              
-              <div class="score-input">
-                <label for="player2Score">Score</label>
-                <input
-                  id="player2Score"
-                  type="number"
-                  v-model.number="player2Score"
-                  min="0"
-                  max="99"
-                  :disabled="isSubmitting"
-                />
-              </div>
-            </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="player2">Jugador 2</label>
+            <select 
+              id="player2" 
+              v-model="form.player2"
+              :class="{ 'error': formErrors.player2 }"
+            >
+              <option value="">Seleccionar jugador</option>
+              <option v-for="player in players" :key="player._id" :value="player._id">
+                {{ player.name }}
+              </option>
+            </select>
+            <span v-if="formErrors.player2" class="error-text">{{ formErrors.player2 }}</span>
           </div>
           
-          <div class="match-summary" v-if="isFormValid">
-            <strong>Match Summary:</strong>
-            <p>
-              {{ getPlayerById(player1Id)?.name }} {{ player1Score }} - {{ player2Score }} {{ getPlayerById(player2Id)?.name }}
-            </p>
-            <p class="winner">
-              Winner: {{ getPlayerById(player1Score > player2Score ? player1Id : player2Id)?.name }}
-            </p>
-          </div>
-          
-          <div class="form-actions">
-            <Button 
-              variant="secondary" 
-              @click="handleClose"
-              :disabled="isSubmitting"
+          <div class="form-group">
+            <label for="score2">Puntuación</label>
+            <input 
+              type="number" 
+              id="score2" 
+              v-model.number="form.score2"
+              min="0"
+              :class="{ 'error': formErrors.score2 }"
             >
-              Cancel
-            </Button>
-            <Button 
-              type="submit" 
-              :disabled="!isFormValid || isSubmitting"
-            >
-              {{ isSubmitting ? 'Saving...' : 'Save Match' }}
-            </Button>
+            <span v-if="formErrors.score2" class="error-text">{{ formErrors.score2 }}</span>
           </div>
-        </form>
-      </div>
+        </div>
+        
+        <div v-if="formErrors.general" class="general-error">
+          {{ formErrors.general }}
+        </div>
+        
+        <div class="match-preview" v-if="isFormValid">
+          <div class="preview-label">Vista previa:</div>
+          <div class="preview-content">
+            <span v-if="form.player1 && players.find(p => p._id === form.player1)">
+              {{ players.find(p => p._id === form.player1).name }}
+            </span>
+            <span class="preview-score">{{ form.score1 }}</span>
+            <span class="preview-vs">vs</span>
+            <span class="preview-score">{{ form.score2 }}</span>
+            <span v-if="form.player2 && players.find(p => p._id === form.player2)">
+              {{ players.find(p => p._id === form.player2).name }}
+            </span>
+          </div>
+          <div class="preview-winner">
+            Ganador: 
+            <span v-if="winnerId && players.find(p => p._id === winnerId)">
+              {{ players.find(p => p._id === winnerId).name }}
+            </span>
+          </div>
+        </div>
+        
+        <div class="form-actions">
+          <button type="button" class="secondary" @click="emit('close')">Cancelar</button>
+          <button 
+            type="submit" 
+            :disabled="!isFormValid || submitting"
+            class="primary"
+          >
+            <span v-if="submitting">Guardando...</span>
+            <span v-else>Guardar</span>
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 </template>
@@ -177,165 +258,186 @@ const handleClose = () => {
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(9, 31, 44, 0.5);
-  backdrop-filter: blur(4px);
+  background-color: rgba(0, 0, 0, 0.5);
   display: flex;
-  align-items: center;
   justify-content: center;
-  z-index: 100;
+  align-items: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
 }
 
-.modal-content {
-  background: white;
-  border-radius: 12px;
+.modal-container {
+  background-color: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08);
   width: 90%;
-  max-width: 600px;
-  box-shadow: 0 4px 30px rgba(9, 31, 44, 0.2);
-  animation: modal-appear 0.3s ease-out;
+  max-width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+  animation: slideIn 0.3s ease;
 }
 
 .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
-  border-bottom: 2px solid #A6BBC8;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .modal-header h3 {
   margin: 0;
-  color: #091F2C;
-  font-weight: 600;
-  font-size: 1.5rem;
 }
 
 .close-button {
-  background: none;
+  background: transparent;
   border: none;
-  font-size: 1.8rem;
+  font-size: 1.5rem;
+  color: var(--color-text-light);
   cursor: pointer;
-  color: #091F2C;
   padding: 0;
-  line-height: 1;
-}
-
-.close-button:hover {
-  color: #C10016;
-}
-
-.modal-body {
-  padding: 24px;
-}
-
-.error-message {
-  background-color: rgba(193, 0, 22, 0.1);
-  color: #C10016;
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-  font-size: 0.95rem;
-}
-
-.players-container {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
-}
-
-.player-column {
-  flex: 1;
-}
-
-.versus {
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 600;
-  color: #091F2C;
-  font-size: 1.2rem;
+  border-radius: 50%;
+  transition: background-color 0.2s;
 }
 
-.score-input {
-  margin-bottom: 20px;
+.close-button:hover {
+  background-color: rgba(0, 0, 0, 0.05);
 }
 
-.score-input label {
+.modal-loading, .modal-error {
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.modal-form {
+  padding: var(--space-6);
+}
+
+.form-row {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.form-group {
+  flex: 1;
+}
+
+.error {
+  border-color: var(--color-error);
+}
+
+.error-text {
+  color: var(--color-error);
+  font-size: 0.875rem;
+  margin-top: var(--space-1);
   display: block;
-  margin-bottom: 8px;
-  font-weight: 500;
-  color: #091F2C;
 }
 
-.score-input input {
-  width: 100%;
-  padding: 12px 16px;
-  border: 2px solid #A6BBC8;
-  border-radius: 8px;
-  font-size: 1rem;
-  color: #091F2C;
-}
-
-.score-input input:focus {
-  outline: none;
-  border-color: #091F2C;
-  box-shadow: 0 0 0 3px rgba(9, 31, 44, 0.1);
-}
-
-.match-summary {
-  background-color: #f8fafc;
-  padding: 20px;
-  border-radius: 8px;
-  margin-bottom: 24px;
-  color: #091F2C;
-}
-
-.match-summary p {
-  margin: 8px 0;
-}
-
-.winner {
-  color: #C10016;
-  font-weight: 500;
+.general-error {
+  color: var(--color-error);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background-color: rgba(239, 68, 68, 0.1);
+  border-radius: 0.25rem;
+  text-align: center;
 }
 
 .form-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 16px;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
 }
 
-@keyframes modal-appear {
+button:disabled {
+  background-color: #d1d5db;
+  cursor: not-allowed;
+}
+
+.match-preview {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background-color: #f9fafb;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-border);
+}
+
+.preview-label {
+  font-weight: 500;
+  margin-bottom: var(--space-2);
+  color: var(--color-text-light);
+}
+
+.preview-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.preview-score {
+  font-weight: bold;
+  font-size: 1.25rem;
+}
+
+.preview-vs {
+  color: var(--color-text-light);
+  margin: 0 var(--space-2);
+}
+
+.preview-winner {
+  margin-top: var(--space-2);
+  text-align: center;
+  font-weight: 500;
+}
+
+.spinner {
+  border: 3px solid rgba(0, 0, 0, 0.1);
+  border-left-color: var(--color-primary);
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  animation: spin 1s linear infinite;
+  margin: 0 auto var(--space-3);
+}
+
+@keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(-20px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
-@media (max-width: 768px) {
-  .players-container {
+@keyframes slideIn {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 640px) {
+  .form-row {
     flex-direction: column;
-    gap: 16px;
-  }
-  
-  .versus {
-    padding: 8px 0;
-  }
-
-  .modal-content {
-    margin: 16px;
-  }
-
-  .modal-header {
-    padding: 16px;
-  }
-
-  .modal-body {
-    padding: 16px;
+    gap: var(--space-3);
   }
 }
 </style>
