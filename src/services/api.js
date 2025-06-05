@@ -2,7 +2,7 @@ import axios from 'axios'
 
 // Create axios instances for different base URLs
 const apiBackend = axios.create({
-  baseURL: 'http://pingpong-xrback-production.up.railway.app',
+  baseURL: 'https://pingpong-xrback-production.up.railway.app',
   headers: {
     'Content-Type': 'application/json'
   }
