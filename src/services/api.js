@@ -9,7 +9,7 @@ const apiBackend = axios.create({
 })
 
 const apiLocal = axios.create({
-  baseURL: 'http://localhost:4000',
+  baseURL: 'https://pingpong-xrback-production.up.railway.app',
   headers: {
     'Content-Type': 'application/json'
   }
